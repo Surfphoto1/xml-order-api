@@ -56,12 +56,3 @@ $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 curl_close($ch);
 
 echo "Supplier response (HTTP $http_code):\n$response";
-
-# Use official PHP base image with Apache
-FROM php:8.2-apache
-
-# Copy your PHP files into the container's web root
-COPY . /var/www/html/
-
-# Expose default Apache port
-EXPOSE 80
