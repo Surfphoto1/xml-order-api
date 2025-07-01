@@ -11,11 +11,15 @@ if (!$data) {
     exit;
 }
 
+// Get credentials from environment variables
+$account = getenv("HP_ACCOUNT") ?: "MISSING_ACCOUNT";
+$password = getenv("HP_PASSWORD") ?: "MISSING_PASSWORD";
+
 $xml_data = <<<XML
 <?xml version="1.0" encoding="iso-8859-1"?>
 <HPEnvelope>
-<account><?= getenv("HP_ACCOUNT") ?></account>
-<password><?= getenv("HP_PASSWORD") ?></password>
+<account>{$account}</account>
+<password>{$password}</password>
 <order>
 <reference>{$data['reference']}</reference>
 <shipby>{$data['shipby']}</shipby>
@@ -56,3 +60,4 @@ $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 curl_close($ch);
 
 echo "Supplier response (HTTP $http_code):\n$response";
+?>
