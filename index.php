@@ -14,8 +14,8 @@ if (!$data) {
 $xml_data = <<<XML
 <?xml version="1.0" encoding="iso-8859-1"?>
 <HPEnvelope>
-<account>xxxmarketplace@gmail.com</account>
-<password>Surfphoto1</password>
+<account>23635DS</account>
+<password>KBNGQXWBXMKMSTK0</password>
 <order>
 <reference>{$data['reference']}</reference>
 <shipby>{$data['shipby']}</shipby>
