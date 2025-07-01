@@ -5,6 +5,20 @@ header("Content-Type: text/plain");
 
 $data = json_decode(file_get_contents("php://input"), true);
 
+$required_fields = [
+    'reference', 'shipby', 'date', 'sku', 'qty',
+    'last', 'first', 'address1', 'city', 'state',
+    'zip', 'country', 'phone', 'emailaddress'
+];
+
+foreach ($required_fields as $field) {
+    if (empty($data[$field])) {
+        http_response_code(400);
+        echo "Missing or empty required field: $field";
+        exit;
+    }
+}
+
 if (!$data) {
     http_response_code(400);
     echo "Invalid input";
