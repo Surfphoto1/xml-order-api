@@ -3,21 +3,24 @@ header("Access-Control-Allow-Origin: *");
 header("Access-Control-Allow-Headers: Content-Type");
 header("Content-Type: text/plain");
 
-// Parse incoming Shopify order webhook
+// Parse incoming Shopify webhook
 $data = json_decode(file_get_contents("php://input"), true);
 
 if (!$data || !isset($data['shipping_address']) || empty($data['line_items'])) {
     http_response_code(400);
+    error_log("❌ Invalid Shopify webhook payload.");
     echo "Invalid Shopify webhook payload.";
     exit;
 }
 
+error_log("✅ Parsed Shopify order data:\n" . print_r($data, true));
+
 // Map Shopify fields to supplier format
 $shipping = $data['shipping_address'];
-$item = $data['line_items'][0]; // Only send first item (can be looped later)
+$item = $data['line_items'][0]; // Only sending first item
 
 $reference = "ORDER" . $data['id'];
-$shipby = "U004"; // You must update this based on your shipping code mapping
+$shipby = "U004"; // Update this with your shipping code mapping
 $date = date("m/d/y", strtotime($data['created_at'] ?? "now"));
 $sku = $item['sku'];
 $qty = $item['quantity'];
@@ -37,7 +40,7 @@ $instructions = $data['note'] ?? '';
 $account = getenv("HP_ACCOUNT") ?: "MISSING_ACCOUNT";
 $password = getenv("HP_PASSWORD") ?: "MISSING_PASSWORD";
 
-// Build XML payload
+// Build XML
 $xml_data = <<<XML
 <?xml version="1.0" encoding="iso-8859-1"?>
 <HPEnvelope>
@@ -68,6 +71,9 @@ $xml_data = <<<XML
 </HPEnvelope>
 XML;
 
+// Log the final XML
+error_log("📦 Sending XML to supplier:\n$xml_data");
+
 // Send XML to Honey's Place
 $ch = curl_init();
 curl_setopt($ch, CURLOPT_URL, "https://www.honeysplace.com/ws/");
@@ -79,11 +85,12 @@ curl_setopt($ch, CURLOPT_HTTPHEADER, [
 ]);
 curl_setopt($ch, CURLOPT_POSTFIELDS, $xml_data);
 
-// Handle errors
+// Handle cURL errors
 $response = curl_exec($ch);
 if (curl_errno($ch)) {
     $error_msg = curl_error($ch);
     http_response_code(502);
+    error_log("❌ cURL error: $error_msg");
     echo "Curl error: $error_msg";
     curl_close($ch);
     exit;
@@ -92,5 +99,9 @@ if (curl_errno($ch)) {
 $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 curl_close($ch);
 
+// Log final response
+error_log("✅ Supplier response (HTTP $http_code):\n$response");
+
+// Echo response to caller (Shopify will ignore it, but it helps for manual tests)
 echo "Supplier response (HTTP $http_code):\n$response";
 ?>
