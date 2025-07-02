@@ -3,24 +3,30 @@ header("Access-Control-Allow-Origin: *");
 header("Access-Control-Allow-Headers: Content-Type");
 header("Content-Type: text/plain");
 
-// Get raw POST data
+// Get raw POST XML from client
 $data = file_get_contents("php://input");
 
-// Submit the order to the supplier API
-$url = "https://supplier-api.example.com/submit-order"; // replace with actual URL
-$options = [
-    'http' => [
-        'header'  => "Content-Type: application/xml\r\n",
-        'method'  => 'POST',
-        'content' => $data,
-    ],
-];
-$context = stream_context_create($options);
-$response = file_get_contents($url, false, $context);
+// Send to Honey's Place
+$url = "https://www.honeysplace.com/ws/";
+$postFields = "xmldata=" . urlencode($data);
 
-// Extract the order reference from the response (example for XML)
+// Use cURL for the request
+$ch = curl_init();
+curl_setopt($ch, CURLOPT_URL, $url);
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+curl_setopt($ch, CURLOPT_POST, true);
+curl_setopt($ch, CURLOPT_POSTFIELDS, $postFields);
+curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false); // Only for dev/test. Set to true in production!
+
+$response = curl_exec($ch);
+$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+$curlError = curl_error($ch);
+curl_close($ch);
+
+// Try to extract order reference from response (optional)
 $orderReference = null;
-if ($response) {
+if ($response && $httpCode == 200) {
     $xml = simplexml_load_string($response);
     if ($xml && isset($xml->reference)) {
         $orderReference = (string)$xml->reference;
@@ -28,20 +34,16 @@ if ($response) {
 }
 
 // ===== STEP 3: LOGGING =====
-
-// Create a log entry
 $logEntry = [
     'timestamp' => date('Y-m-d H:i:s'),
-    'order_data' => $data, // what you submitted
-    'response' => $response, // what you got back
+    'order_data' => $data,
+    'response' => $response ?: $curlError,
+    'http_code' => $httpCode,
     'reference' => $orderReference ?? null
 ];
 
-// Convert to a readable format (you can also use JSON or CSV)
 $logLine = json_encode($logEntry) . PHP_EOL;
-
-// Save to a log file (e.g., "order_log.txt")
 file_put_contents('order_log.txt', $logLine, FILE_APPEND);
 
-// Output response to the client
-echo $response;
+// Return response to caller
+echo $response ?: "Error submitting order: $curlError";
