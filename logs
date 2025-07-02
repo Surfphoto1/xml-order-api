@@ -1,0 +1,3 @@
+mkdir logs
+touch logs/orders.log
+chmod 666 logs/orders.log
