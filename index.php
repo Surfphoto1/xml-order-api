@@ -3,54 +3,97 @@ header("Access-Control-Allow-Origin: *");
 header("Access-Control-Allow-Headers: Content-Type");
 header("Content-Type: text/plain");
 
-// Get raw POST XML from client
-$data = file_get_contents("php://input");
+// Parse incoming JSON
+$data = json_decode(file_get_contents("php://input"), true);
 
-// Debug: Save the raw XML input
-file_put_contents('debug_input.xml', $data);
+if (!$data) {
+    http_response_code(400);
+    echo "Invalid input: JSON payload is missing or malformed.";
+    exit;
+}
 
-// Build POST body for Honey's Place (URL-encoded XML)
-$postFields = "xmldata=" . urlencode($data);
+// Required fields for the order
+$required_fields = [
+    'reference', 'shipby', 'date', 'sku', 'qty',
+    'last', 'first', 'address1', 'city', 'state',
+    'zip', 'country', 'phone', 'emailaddress'
+];
 
-// Debug: Save the encoded POST fields
-file_put_contents('debug_postfields.txt', $postFields);
-
-// Send to Honey's Place
-$url = "https://www.honeysplace.com/ws/";
-$ch = curl_init();
-curl_setopt($ch, CURLOPT_URL, $url);
-curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-curl_setopt($ch, CURLOPT_TIMEOUT, 10);
-curl_setopt($ch, CURLOPT_POST, true);
-curl_setopt($ch, CURLOPT_POSTFIELDS, $postFields);
-curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false); // Only for dev/test. Set to true in production!
-curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (compatible; HoneyClient/1.0)');
-
-$response = curl_exec($ch);
-$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-$curlError = curl_error($ch);
-curl_close($ch);
-
-// Try to extract order reference from response (optional)
-$orderReference = null;
-if ($response && $httpCode == 200) {
-    $xml = simplexml_load_string($response);
-    if ($xml && isset($xml->reference)) {
-        $orderReference = (string)$xml->reference;
+// Validate required fields
+foreach ($required_fields as $field) {
+    if (empty($data[$field])) {
+        http_response_code(400);
+        echo "Missing or empty required field: $field";
+        exit;
     }
 }
 
-// ===== STEP 3: LOGGING =====
-$logEntry = [
-    'timestamp' => date('Y-m-d H:i:s'),
-    'order_data' => $data,
-    'response' => $response ?: $curlError,
-    'http_code' => $httpCode,
-    'reference' => $orderReference ?? null
-];
+// Validate email format
+if (!filter_var($data['emailaddress'], FILTER_VALIDATE_EMAIL)) {
+    http_response_code(400);
+    echo "Invalid email address format.";
+    exit;
+}
 
-$logLine = json_encode($logEntry) . PHP_EOL;
-file_put_contents('order_log.txt', $logLine, FILE_APPEND);
+// Load credentials from environment
+$account = getenv("HP_ACCOUNT") ?: "MISSING_ACCOUNT";
+$password = getenv("HP_PASSWORD") ?: "MISSING_PASSWORD";
 
-// Return response to caller
-echo $response ?: "Error submitting order: $curlError";
+// Build XML
+$xml_data = <<<XML
+<?xml version="1.0" encoding="iso-8859-1"?>
+<HPEnvelope>
+<account>{$account}</account>
+<password>{$password}</password>
+<order>
+<reference>{$data['reference']}</reference>
+<shipby>{$data['shipby']}</shipby>
+<date>{$data['date']}</date>
+<items>
+  <item>
+    <sku>{$data['sku']}</sku>
+    <qty>{$data['qty']}</qty>
+  </item>
+</items>
+<last>{$data['last']}</last>
+<first>{$data['first']}</first>
+<address1>{$data['address1']}</address1>
+<address2>{$data['address2']}</address2>
+<city>{$data['city']}</city>
+<state>{$data['state']}</state>
+<zip>{$data['zip']}</zip>
+<country>{$data['country']}</country>
+<phone>{$data['phone']}</phone>
+<emailaddress>{$data['emailaddress']}</emailaddress>
+<instructions>{$data['instructions']}</instructions>
+</order>
+</HPEnvelope>
+XML;
+
+// Send XML to Honey's Place
+$ch = curl_init();
+curl_setopt($ch, CURLOPT_URL, "https://www.honeysplace.com/ws/");
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+curl_setopt($ch, CURLOPT_POST, true);
+curl_setopt($ch, CURLOPT_HTTPHEADER, [
+    "Content-Type: application/xml",
+    "Content-Length: " . strlen($xml_data)
+]);
+curl_setopt($ch, CURLOPT_POSTFIELDS, $xml_data);
+
+// Handle curl errors
+$response = curl_exec($ch);
+if (curl_errno($ch)) {
+    $error_msg = curl_error($ch);
+    http_response_code(502);
+    echo "Curl error: $error_msg";
+    curl_close($ch);
+    exit;
+}
+
+$http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+curl_close($ch);
+
+// Final response
+echo "Supplier response (HTTP $http_code):\n$response";
+?>
