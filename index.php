@@ -3,69 +3,67 @@ header("Access-Control-Allow-Origin: *");
 header("Access-Control-Allow-Headers: Content-Type");
 header("Content-Type: text/plain");
 
-// Parse incoming JSON
+// Parse incoming Shopify order webhook
 $data = json_decode(file_get_contents("php://input"), true);
 
-if (!$data) {
+if (!$data || !isset($data['shipping_address']) || empty($data['line_items'])) {
     http_response_code(400);
-    echo "Invalid input: JSON payload is missing or malformed.";
+    echo "Invalid Shopify webhook payload.";
     exit;
 }
 
-// Required fields for the order
-$required_fields = [
-    'reference', 'shipby', 'date', 'sku', 'qty',
-    'last', 'first', 'address1', 'city', 'state',
-    'zip', 'country', 'phone', 'emailaddress'
-];
+// Map Shopify fields to supplier format
+$shipping = $data['shipping_address'];
+$item = $data['line_items'][0]; // Only send first item (can be looped later)
 
-// Validate required fields
-foreach ($required_fields as $field) {
-    if (empty($data[$field])) {
-        http_response_code(400);
-        echo "Missing or empty required field: $field";
-        exit;
-    }
-}
-
-// Validate email format
-if (!filter_var($data['emailaddress'], FILTER_VALIDATE_EMAIL)) {
-    http_response_code(400);
-    echo "Invalid email address format.";
-    exit;
-}
+$reference = "ORDER" . $data['id'];
+$shipby = "U004"; // You must update this based on your shipping code mapping
+$date = date("m/d/y", strtotime($data['created_at'] ?? "now"));
+$sku = $item['sku'];
+$qty = $item['quantity'];
+$last = $shipping['last_name'];
+$first = $shipping['first_name'];
+$address1 = $shipping['address1'];
+$address2 = $shipping['address2'] ?? '';
+$city = $shipping['city'];
+$state = $shipping['province'];
+$zip = $shipping['zip'];
+$country = $shipping['country_code'];
+$phone = $shipping['phone'] ?? '000-000-0000';
+$emailaddress = $data['email'] ?? 'noemail@example.com';
+$instructions = $data['note'] ?? '';
 
 // Load credentials from environment
 $account = getenv("HP_ACCOUNT") ?: "MISSING_ACCOUNT";
 $password = getenv("HP_PASSWORD") ?: "MISSING_PASSWORD";
 
-// Build XML
+// Build XML payload
 $xml_data = <<<XML
 <?xml version="1.0" encoding="iso-8859-1"?>
 <HPEnvelope>
 <account>{$account}</account>
 <password>{$password}</password>
 <order>
-<reference>{$data['reference']}</reference>
-<shipby>{$data['shipby']}</shipby>
-<date>{$data['date']}</date>
+<reference>{$reference}</reference>
+<shipby>{$shipby}</shipby>
+<date>{$date}</date>
 <items>
   <item>
-    <sku>{$data['sku']}</sku>
-    <qty>{$data['qty']}</qty>
+    <sku>{$sku}</sku>
+    <qty>{$qty}</qty>
   </item>
 </items>
-<last>{$data['last']}</last>
-<first>{$data['first']}</first>
-<address1>{$data['address1']}</address1>
-<address2>{$data['address2']}</address2>
-<city>{$data['city']}</city>
-<state>{$data['state']}</state>
-<zip>{$data['zip']}</zip>
-<country>{$data['country']}</country>
-<phone>{$data['phone']}</phone>
-<emailaddress>{$data['emailaddress']}</emailaddress>
-<instructions>{$data['instructions']}</instructions>
+<last>{$last}</last>
+<first>{$first}</first>
+<address1>{$address1}</address1>
+<address2>{$address2}</address2>
+<city>{$city}</city>
+<state>{$state}</state>
+<zip>{$zip}</zip>
+<country>{$country}</country>
+<phone>{$phone}</phone>
+<emailaddress>{$emailaddress}</emailaddress>
+<instructions>{$instructions}</instructions>
 </order>
 </HPEnvelope>
 XML;
@@ -81,7 +79,7 @@ curl_setopt($ch, CURLOPT_HTTPHEADER, [
 ]);
 curl_setopt($ch, CURLOPT_POSTFIELDS, $xml_data);
 
-// Handle curl errors
+// Handle errors
 $response = curl_exec($ch);
 if (curl_errno($ch)) {
     $error_msg = curl_error($ch);
@@ -94,6 +92,5 @@ if (curl_errno($ch)) {
 $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 curl_close($ch);
 
-// Final response
 echo "Supplier response (HTTP $http_code):\n$response";
 ?>
