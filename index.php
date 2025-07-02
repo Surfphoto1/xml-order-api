@@ -1,46 +1,64 @@
 <?php
+date_default_timezone_set("UTC");
+
+// === CONFIG ===
+define("LOG_FILE", __DIR__ . "/logs/orders.log");
+define("ALLOWED_SKU_PREFIX", "CC-"); // adjust for Honey’s Place
+define("EMAIL_TO", "your@email.com"); // change to your notification email
+define("SHOPIFY_SHARED_SECRET", getenv("SHOPIFY_SECRET") ?: ""); // set this in Render
+
+// === HEADERS ===
 header("Access-Control-Allow-Origin: *");
-header("Access-Control-Allow-Headers: Content-Type");
+header("Access-Control-Allow-Headers: Content-Type, X-Shopify-Hmac-Sha256");
 header("Content-Type: text/plain");
 
-// Parse incoming Shopify webhook
-$data = json_decode(file_get_contents("php://input"), true);
+// === VERIFY SHOPIFY HMAC ===
+$hmac_header = $_SERVER['HTTP_X_SHOPIFY_HMAC_SHA256'] ?? '';
+$raw_input = file_get_contents("php://input");
 
-if (!$data || !isset($data['shipping_address']) || empty($data['line_items'])) {
-    http_response_code(400);
-    error_log("❌ Invalid Shopify webhook payload.");
-    echo "Invalid Shopify webhook payload.";
+$calculated_hmac = base64_encode(hash_hmac('sha256', $raw_input, SHOPIFY_SHARED_SECRET, true));
+if (!hash_equals($hmac_header, $calculated_hmac)) {
+    http_response_code(401);
+    error_log("❌ Invalid HMAC signature. Rejecting webhook.");
+    echo "Unauthorized";
     exit;
 }
 
-error_log("✅ Parsed Shopify order data:\n" . print_r($data, true));
+// === PARSE PAYLOAD ===
+$data = json_decode($raw_input, true);
+if (!$data || !isset($data['shipping_address']) || empty($data['line_items'])) {
+    http_response_code(400);
+    error_log("❌ Invalid Shopify webhook payload.");
+    echo "Invalid webhook payload.";
+    exit;
+}
 
-// Map Shopify fields to supplier format
 $shipping = $data['shipping_address'];
-$item = $data['line_items'][0]; // Only sending first item
+$items_xml = "";
+foreach ($data['line_items'] as $item) {
+    $sku = $item['sku'];
+    $qty = $item['quantity'];
 
-$reference = "ORDER" . $data['id'];
-$shipby = "U004"; // Update this with your shipping code mapping
-$date = date("m/d/y", strtotime($data['created_at'] ?? "now"));
-$sku = $item['sku'];
-$qty = $item['quantity'];
-$last = $shipping['last_name'];
-$first = $shipping['first_name'];
-$address1 = $shipping['address1'];
-$address2 = $shipping['address2'] ?? '';
-$city = $shipping['city'];
-$state = $shipping['province'];
-$zip = $shipping['zip'];
-$country = $shipping['country_code'];
-$phone = $shipping['phone'] ?? '000-000-0000';
-$emailaddress = $data['email'] ?? 'noemail@example.com';
-$instructions = $data['note'] ?? '';
+    // Filter: only send items with matching prefix
+    if (stripos($sku, ALLOWED_SKU_PREFIX) !== 0) continue;
 
-// Load credentials from environment
+    $items_xml .= "<item><sku>{$sku}</sku><qty>{$qty}</qty></item>\n";
+}
+
+// If no valid items to send, skip submission
+if (empty(trim($items_xml))) {
+    error_log("⚠️ No eligible items to send. Order skipped.");
+    echo "No valid items to submit.";
+    exit;
+}
+
+// === BUILD XML ===
 $account = getenv("HP_ACCOUNT") ?: "MISSING_ACCOUNT";
 $password = getenv("HP_PASSWORD") ?: "MISSING_PASSWORD";
+$reference = "ORDER" . $data['id'];
+$shipby = "U004"; // You can dynamically map this if needed
+$date = date("m/d/y", strtotime($data['created_at'] ?? "now"));
 
-// Build XML
 $xml_data = <<<XML
 <?xml version="1.0" encoding="iso-8859-1"?>
 <HPEnvelope>
@@ -51,30 +69,26 @@ $xml_data = <<<XML
 <shipby>{$shipby}</shipby>
 <date>{$date}</date>
 <items>
-  <item>
-    <sku>{$sku}</sku>
-    <qty>{$qty}</qty>
-  </item>
-</items>
-<last>{$last}</last>
-<first>{$first}</first>
-<address1>{$address1}</address1>
-<address2>{$address2}</address2>
-<city>{$city}</city>
-<state>{$state}</state>
-<zip>{$zip}</zip>
-<country>{$country}</country>
-<phone>{$phone}</phone>
-<emailaddress>{$emailaddress}</emailaddress>
-<instructions>{$instructions}</instructions>
+{$items_xml}</items>
+<last>{$shipping['last_name']}</last>
+<first>{$shipping['first_name']}</first>
+<address1>{$shipping['address1']}</address1>
+<address2>{$shipping['address2']}</address2>
+<city>{$shipping['city']}</city>
+<state>{$shipping['province']}</state>
+<zip>{$shipping['zip']}</zip>
+<country>{$shipping['country_code']}</country>
+<phone>{$shipping['phone']}</phone>
+<emailaddress>{$data['email']}</emailaddress>
+<instructions>{$data['note']}</instructions>
 </order>
 </HPEnvelope>
 XML;
 
-// Log the final XML
-error_log("📦 Sending XML to supplier:\n$xml_data");
+// === LOG TO FILE ===
+file_put_contents(LOG_FILE, date("Y-m-d H:i:s") . "\nXML Sent:\n$xml_data\n\n", FILE_APPEND);
 
-// Send XML to Honey's Place
+// === SUBMIT TO HONEY'S PLACE ===
 $ch = curl_init();
 curl_setopt($ch, CURLOPT_URL, "https://www.honeysplace.com/ws/");
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
@@ -85,23 +99,19 @@ curl_setopt($ch, CURLOPT_HTTPHEADER, [
 ]);
 curl_setopt($ch, CURLOPT_POSTFIELDS, $xml_data);
 
-// Handle cURL errors
 $response = curl_exec($ch);
-if (curl_errno($ch)) {
-    $error_msg = curl_error($ch);
-    http_response_code(502);
-    error_log("❌ cURL error: $error_msg");
-    echo "Curl error: $error_msg";
-    curl_close($ch);
-    exit;
-}
-
 $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 curl_close($ch);
 
-// Log final response
-error_log("✅ Supplier response (HTTP $http_code):\n$response");
+// === LOG RESPONSE ===
+file_put_contents(LOG_FILE, "Supplier response (HTTP $http_code):\n$response\n\n", FILE_APPEND);
 
-// Echo response to caller (Shopify will ignore it, but it helps for manual tests)
+// === EMAIL CONFIRMATION ===
+$subject = "✅ Order Submitted: $reference";
+$message = "Response:\n$response\n\nSent XML:\n$xml_data";
+$headers = "From: orders@xxxmarketplace.net";
+@mail(EMAIL_TO, $subject, $message, $headers);
+
+// === OUTPUT ===
 echo "Supplier response (HTTP $http_code):\n$response";
 ?>
